@@ -206,6 +206,8 @@ def calc_new_location_to_target(from_lat, from_lon, heading, distance1):
     from geopy import distance
     from geopy import Point
 
+    distance1 -= 2.5
+
     # given: current latitude, current longitude,
     #        heading = bearing in degrees,
     #        distance from current location (in meters)
@@ -412,7 +414,7 @@ def camera_angle():
             accel = f1[1].as_motion_frame().get_motion_data()
 
             if not accel:
-                print("no frame at cam ")
+                log.info("no frame at cam ")
                 continue
 
             accel_angle_x = math.degrees(math.atan2(accel.y, accel.z))
@@ -430,7 +432,7 @@ def camera_angle():
 
     if cameraAngle < 0.0:
         cameraAngle *= -1.0
-    print("camera angle = " + str(cameraAngle))
+    log.info("camera angle = " + str(cameraAngle))
     return cameraAngle
 
 
@@ -438,7 +440,15 @@ def object_angle_from_camera(pixel_len):
     angle_off_camera = -0.05415852 + 0.0988484043*abs(pixel_len) + -3.17970573*pow(10, -5)*pow(pixel_len, 2)
     if pixel_len < 0:
         angle_off_camera *= -1
-    print("angle from camera center = " + str(angle_off_camera))
+    log.info("angle from camera center = " + str(angle_off_camera))
+    return angle_off_camera
+
+
+def object_heading_from_camera(pixel_len):
+    angle_off_camera = -0.031775876 + 0.0962522703*abs(pixel_len) + -2.363195401*pow(10, -5)*pow(pixel_len, 2)
+    if pixel_len < 0:
+        angle_off_camera *= -1
+    log.info("heading from camera center = " + str(angle_off_camera))
     return angle_off_camera
 
 
@@ -448,7 +458,7 @@ def get_angle_from_vertical(pixels):
     # print("Pixels from center:" + str(pixels))
     # print("Degrees from center:" + str(object_angle))
     num = gyro_angle + object_angle
-    print("angle from downward vertical to target = " + str(num))
+    log.info("angle from downward vertical to target = " + str(num))
     return num
 
 
@@ -470,7 +480,7 @@ if __name__ == '__main__':
     # drone = drone_lib.connect_device("/dev/ttyACM0", baud=115200, log=log)
 
     # Create a message listener using the decorator.
-    print(f"Finder above ground: {drone.rangefinder.distance}")
+    log.info(f"Finder above ground: {drone.rangefinder.distance}")
 
     # Test latch - ensure open/close.
     release_grip(2)
@@ -485,7 +495,7 @@ if __name__ == '__main__':
         exit(-1)
 
     # load serialized caffe model from disk
-    print("[INFO] loading model...")
+    log.info("[INFO] loading model...")
 
     # for now, just directly supply args here...
     # net = cv2.dnn.readNetFromCaffe("MobileNetSSD_deploy.prototxt.txt", "MobileNetSSD_deploy.caffemodel")
@@ -605,7 +615,20 @@ if __name__ == '__main__':
                     (xDist, yDist) = center
                     horizontalPix = xDist - 320
                     verticalPix = 240 - yDist
-                    groundDist = get_ground_distance(1.42, verticalPix)
+                    # groundDist = get_ground_distance(1.42, verticalPix)
+                    groundDist = get_ground_distance(last_alt, verticalPix)
+                    heading = object_heading_from_camera(horizontalPix) + last_obj_heading
+                    (new_lat, new_long) = calc_new_location_to_target(last_obj_lat, last_obj_lon, heading, groundDist)
+                    # Go to
+                    drone_lib.change_device_mode(drone, "GUIDED", log=log)
+                    drone_lib.goto_point(drone, new_lat, new_long, 0.25, last_obj_alt)
+                    # Execute drop
+                    drone_lib.goto_point(drone, new_lat, new_long, 0.25, 1.0)
+                    release_grip()
+                    # Ascend to working altitude
+                    drone_lib.goto_point(drone, new_lat, new_long, 0.25, last_obj_alt)
+                    # RTL
+                    drone_lib.return_to_launch(drone, log)
 
             if cv2.waitKey(1) & 0xff == ord('q'):
                 break

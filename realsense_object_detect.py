@@ -73,6 +73,8 @@ def detect_from_image(frame, net, swapRB=False):
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, COLORS[idx], 2)
 
     # show the output frame
+    cv2.line(frame, (0, 240), (640, 240), (0,255,0), 3)
+    cv2.line(frame, (320, 0), (320, 480), (0, 255, 0), 3)
     cv2.imshow("Frame", frame)
 
 
@@ -123,6 +125,7 @@ def main():
             key = cv2.waitKey(1) & 0xFF
             # if the `q` key was pressed, break from the loop
             if key == ord("q"):
+                cv2.imwrite("savedimage.png", frame)
                 break
 
             # update the FPS counter
