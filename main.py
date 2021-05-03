@@ -121,7 +121,7 @@ last_point = None  # center point in pixels
 use custom yolo to evaluate video stream
 """
 
-CONF_THRESH, NMS_THRESH = 0.05,0.3
+CONF_THRESH, NMS_THRESH = 0.25,0.3
 
 
 def release_grip(seconds=2):
@@ -627,6 +627,17 @@ if __name__ == '__main__':
                     release_grip()
                     # Ascend to working altitude
                     drone_lib.goto_point(drone, new_lat, new_long, 0.25, last_obj_alt)
+                    i = 0
+                    while i < 6:
+                        last_lon = location.lon
+                        last_lat = location.lat
+                        last_alt = location.alt
+                        last_heading = drone.heading
+                        ISR_image_name = str(last_lat) + "_" + str(last_lon) + "_" + str(last_heading) + ".png"
+                        cv2.imwrite(ISR_image_name, img)
+                        drone_lib.condition_yaw(drone, 60)
+                        time.sleep(5)
+                        i += 1
                     # RTL
                     drone_lib.return_to_launch(drone, log)
 
