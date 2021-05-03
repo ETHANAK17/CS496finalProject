@@ -53,7 +53,7 @@ def detect_from_image(frame, net, swapRB=False):
 
         # filter out weak detections by ensuring the `confidence` is
         # greater than the minimum confidence
-        if confidence > 0.25:  # args["confidence"]:
+        if confidence > 0.2:  # args["confidence"]:
             # extract the index of the class label from the
             # `detections`, then compute the (x, y)-coordinates of
             # the bounding box for the object
@@ -74,6 +74,7 @@ def detect_from_image(frame, net, swapRB=False):
 
     # show the output frame
     cv2.imshow("Frame", frame)
+
 
 
 
@@ -136,7 +137,7 @@ def main():
     # stop the timer and display FPS information
     fps.stop()
     print("[INFO] elapsed time: {:.2f}".format(fps.elapsed()))
-    print("[INFO] approx. FPS: {:.2f}".format(fps.fps()))
+    print("[INFO] approx. FPS:q {:.2f}".format(fps.fps()))
 
     # do a bit of cleanup
     cv2.destroyAllWindows()

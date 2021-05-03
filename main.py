@@ -94,29 +94,73 @@ last_point = None  # center point in pixels
 pipeline = rs.pipeline()
 config = rs.config()
 
-# construct the argument parse and parse the arguments
-ap = argparse.ArgumentParser()
-ap.add_argument("-p", "--prototxt", required=True,
-                help="path to Caffe 'deploy' prototxt file")
-ap.add_argument("-m", "--model", required=True,
-                help="path to Caffe pre-trained model")
-ap.add_argument("-c", "--confidence", type=float, default=0.2,
-                help="minimum probability to filter weak detections")
+# # construct the argument parse and parse the arguments
+# ap = argparse.ArgumentParser()
+# ap.add_argument("-p", "--prototxt", required=True,
+#                 help="path to Caffe 'deploy' prototxt file")
+# ap.add_argument("-m", "--model", required=True,
+#                 help="path to Caffe pre-trained model")
+# ap.add_argument("-c", "--confidence", type=float, default=0.2,
+#                 help="minimum probability to filter weak detections")
+#
+# # todo: uncomment when deploying...
+# # args = vars(ap.parse_args())
+#
+# # initialize the list of class labels MobileNet SSD was trained to
+# # detect, then generate a set of bounding box colors for each class
+# CLASSES = ["background", "aeroplane", "bicycle", "bird", "boat",
+#            "bottle", "bus", "car", "cat", "chair", "cow", "diningtable",
+#            "dog", "horse", "motorbike", "person", "pottedplant", "sheep",
+#            "sofa", "train", "tvmonitor"]
+#
+# COLORS = np.random.uniform(0, 255, size=(len(CLASSES), 3))
+#
+# live = True
 
-# todo: uncomment when deploying...
-# args = vars(ap.parse_args())
+"""
+use custom yolo to evaluate video stream
+"""
 
-# initialize the list of class labels MobileNet SSD was trained to
-# detect, then generate a set of bounding box colors for each class
-CLASSES = ["background", "aeroplane", "bicycle", "bird", "boat",
-           "bottle", "bus", "car", "cat", "chair", "cow", "diningtable",
-           "dog", "horse", "motorbike", "person", "pottedplant", "sheep",
-           "sofa", "train", "tvmonitor"]
+CONF_THRESH, NMS_THRESH = 0.05,0.3
 
-COLORS = np.random.uniform(0, 255, size=(len(CLASSES), 3))
+in_weights = 'yolov4-tiny-custom_last.weights'
+in_config = 'yolov4-tiny-custom.cfg'
+name_file = 'custom.names'
 
-live = True
+"""
+load names
+"""
+with open(name_file, "r") as f:
+    classes = [line.strip() for line in f.readlines()]
 
+print(classes)
+
+"""
+Load the network
+"""
+net = cv2.dnn.readNetFromDarknet(in_config, in_weights)
+net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
+net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
+layers = net.getLayerNames()
+output_layers = [layers[i[0] - 1] for i in net.getUnconnectedOutLayers()]
+
+"""
+iminitalize video from realsense
+"""
+
+pipeline = rs.pipeline()
+config = rs.config()
+config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
+pipeline.start(config)
+profile = pipeline.get_active_profile()
+image_profile = rs.video_stream_profile(profile.get_stream(rs.stream.color))
+image_intrinsics = image_profile.get_intrinsics()
+frame_w, frame_h = image_intrinsics.width, image_intrinsics.height
+
+print('image: {} w  x {} h pixels'.format(frame_w, frame_h))
+
+colors = np.random.uniform(0, 255, size=(len(classes), 3))
+myColor = (20, 20, 230)
 
 def release_grip(seconds=2):
     sec = 1
@@ -185,15 +229,15 @@ def get_cur_frame(attempts=5, flip_v=False):
         tries += 1
 
 
-def get_ground_distance(height, hypotenuse):
-    import math
-
+def get_ground_distance(height, pixels):
     # Assuming we know the distance to object from the air
     # (the hypotenuse), we can calculate the ground distance
     # by using the simple formula of:
     # d^2 = hypotenuse^2 - height^2
-
-    return math.sqrt(hypotenuse ** 2 - height ** 2)
+    angle = get_angle_from_vertical(pixels)
+    num = height * math.tan(angle*math.pi/180)
+    print("Object is " + str(num) + " feet away")
+    return num
 
 
 def calc_new_location_to_target(from_lat, from_lon, heading, distance1):
@@ -212,6 +256,49 @@ def calc_new_location_to_target(from_lat, from_lon, heading, distance1):
 
 
 def check_for_initial_target(net, swapRB=False):
+
+    img = get_cur_frame()
+
+    cv2.putText(img, 'detecting...', (75, 75), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (20,20,230), 2)
+
+    blob = cv2.dnn.blobFromImage(img, 0.00392, (192, 192), swapRB=False, crop=False)
+
+    # blob = cv2.dnn.blobFromImage(
+    #    cv2.resize(img, (416, 416)),
+    #    0.007843, (416, 416), 127.5)
+
+    net.setInput(blob)
+    layer_outputs = net.forward(output_layers)
+
+    class_ids, confidences, b_boxes = [], [], []
+    for output in layer_outputs:
+
+        for detection in output:
+            scores = detection[5:]
+            class_id = np.argmax(scores)
+            confidence = scores[class_id]
+            if confidence > CONF_THRESH:
+                center_x, center_y, w, h = \
+                    (detection[0:4] * np.array([frame_w, frame_h, frame_w, frame_h])).astype('int')
+
+                x = int(center_x - w / 2)
+                y = int(center_y - h / 2)
+
+                b_boxes.append([x, y, int(w), int(h)])
+                confidences.append(float(confidence))
+                class_ids.append(int(class_id))
+
+    if len(b_boxes) > 0:
+        # Perform non maximum suppression for the bounding boxes
+        # to filter overlapping and low confidence bounding boxes.
+        indices = cv2.dnn.NMSBoxes(b_boxes, confidences, CONF_THRESH, NMS_THRESH).flatten()
+        for index in indices:
+            x, y, w, h = b_boxes[index]
+            cv2.rectangle(img, (x, y), (x + w, y + h), (20, 20, 230), 2)
+            cv2.putText(img, classes[class_ids[index]], (x + 5, y + 20), cv2.FONT_HERSHEY_COMPLEX_SMALL, 1, myColor, 2)
+
+    cv2.imshow("Tracking", img)
+    '''
     frame = get_cur_frame()
 
     (h, w) = frame.shape[:2]
@@ -252,17 +339,18 @@ def check_for_initial_target(net, swapRB=False):
 
     # show the output frame
     cv2.imshow("Frame", frame)
+    logging.info("Frame posted")
+
+    '''
 
     if 'startX' in locals():
-        center = ((endX - startX) / 2 + startX, (endX - startX) / 2 + startX)
-        x = startX
-        y = startY
-        radius = (endY - startY + endX - startX) / 2
+        center = (w / 2 + x, h / 2 + y)
+        radius = w + h / 2
 
-        return center, radius, (x, y), frame
+        return center, radius, (x, y), img
 
     else:
-        return None
+        return None, None, (None, None), img
 
 
 def determine_drone_actions(last_point, frame, target_sightings):
@@ -283,7 +371,6 @@ def conduct_mission(net):
     start_camera_stream()
 
     while drone.armed:  # While the drone's mission is executing...
-
         if drone.mode == "RTL":
             mission_mode = MISSION_MODE_RTL
             logging.info("RTL mode activated.  Mission ended.")
@@ -300,24 +387,49 @@ def conduct_mission(net):
         center, radius, (x, y), frame = check_for_initial_target(net)
 
         if center is not None:
-
             logging.info(f"(Potential) target acquired @"
                          f"({center[0], center[1]}) with radius {radius}.")
 
             target_sightings += 1
+            iterations = 1
+            while iterations < 15:
+                iterations += 1
+                # look for a target in current frame
+                center1, radius1, (x1, y1), frame1 = check_for_initial_target(net)
+                if center1 is not None:
+                    center = center1
+                    radius = radius1
+                    (x, y) = (x1, y1)
+                    frame = frame1
+                    target_sightings += 1
 
-            # We're looking for a person/pedestrian...
-            last_point = center
+            enough_seen = float(target_sightings) / float(iterations) > .7
 
-            if mission_mode == MISSION_MODE_SEEK:
-                logging.info(f"Locking in on lat {last_lat}, lon {last_lon}, "
-                             f"alt {last_alt}, heading {last_heading}.")
+            if enough_seen:
+                # We're looking for a person/pedestrian...
+                last_point = center
 
-                last_obj_lon = last_lon
-                last_obj_lat = last_lat
-                last_obj_alt = last_alt
-                last_obj_heading = last_heading
+                if mission_mode == MISSION_MODE_SEEK:
+                    logging.info(f"Locking in on lat {last_lat}, lon {last_lon}, "
+                                 f"alt {last_alt}, heading {last_heading}.")
 
+                    last_obj_lon = last_lon
+                    last_obj_lat = last_lat
+                    last_obj_alt = last_alt
+                    last_obj_heading = last_heading
+
+                    # get pixels to object
+                    xDist, yDist = center
+                    horizontalPix = xDist - 320
+                    verticalPix = yDist - 240
+                    get_ground_distance(4.6666, horizontalPix)
+
+            else:
+                # We have no target in the current frame.
+                logging.info("No target found; continuing search...")
+                cv2.putText(frame, "Scanning for target...", (10, 400), font, 1, (255, 0, 0), 2, cv2.LINE_AA)
+                target_sightings = 0  # reset target sighting
+                last_point = None
             # TODO: draw bounding box around potential target in the current frame...
 
 
@@ -362,19 +474,22 @@ def conduct_mission(net):
         counter += 1
 
 
-def angle():
+def camera_angle():
     # gets current angle of the realsense
+    # angle of 0 = level with horizon
+    # negative angle = pitched to sky
+    # positive angle = looking down
 
-    anglepip = rs.pipeline()
-    angleconfig = rs.config()
-    angleconfig.enable_stream(rs.stream.accel)
-    anglepip.start(angleconfig)
+    angle_pipe = rs.pipeline()
+    angle_config = rs.config()
+    angle_config.enable_stream(rs.stream.accel)
+    angle_pipe.start(angle_config)
 
     camera_angle = 0
 
     try:
         while True:
-            f1 = anglepip.wait_for_frames()
+            f1 = angle_pipe.wait_for_frames()
             accel = f1[0].as_motion_frame().get_motion_data()
 
             if not accel:
@@ -387,10 +502,32 @@ def angle():
             break
 
     finally:
-        anglepip.stop()
+        angle_pipe.stop()
+    if camera_angle < 0:
+        camera_angle *= -1
 
+    camera_angle -= 180
+
+    if camera_angle < 0:
+        camera_angle *= -1
     print("camera angle = " + str(camera_angle))
     return camera_angle
+
+
+def object_angle_from_camera(pixel_len):
+    angle_off_camera = -0.05415852 + 0.0988484043*abs(pixel_len) + -3.17970573*pow(10, -5)*pow(pixel_len, 2)
+    if pixel_len < 0:
+        angle_off_camera *= -1
+    print("angle from camera center = " + str(angle_off_camera))
+    return angle_off_camera
+
+
+def get_angle_from_vertical(pixels):
+    gyro_angle = camera_angle()
+    object_angle = object_angle_from_camera(pixels)
+    num = gyro_angle + object_angle
+    print("angle from downward vertical to target = " + str(num))
+    return num
 
 
 def main():
@@ -409,8 +546,8 @@ def main():
     log.info("PEX 03 start.")
 
     # Connect to the autopilot
-    # drone = drone_lib.connect_device("127.0.0.1:14550", log=log)
-    drone = drone_lib.connect_device("/dev/ttyACM0", baud=115200, log=log)
+    drone = drone_lib.connect_device("127.0.0.1:14550", log=log)
+    # drone = drone_lib.connect_device("/dev/ttyACM0", baud=115200, log=log)
 
     # Create a message listener using the decorator.
     print(f"Finder above ground: {drone.rangefinder.distance}")
@@ -446,7 +583,7 @@ def main():
         log.info("backing up old images...")
 
         # Backup any previous images and create new empty folder for current experiment.
-        backup_prev_experiment(IMG_SNAPSHOT_PATH)
+        # backup_prev_experiment(IMG_SNAPSHOT_PATH)
 
         # Now, look for target...
         conduct_mission(net)
@@ -459,3 +596,6 @@ def main():
     except Exception as e:
         log.info(f"Program exception: {traceback.format_exception(*sys.exc_info())}")
         raise
+
+
+main()
