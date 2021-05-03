@@ -635,7 +635,7 @@ if __name__ == '__main__':
                         last_heading = drone.heading
                         ISR_image_name = str(last_lat) + "_" + str(last_lon) + "_" + str(last_heading) + ".png"
                         cv2.imwrite(ISR_image_name, img)
-                        drone_lib.condition_yaw(drone, 60)
+                        drone_lib.condition_yaw(drone, 60, True)
                         time.sleep(5)
                         i += 1
                     # RTL
